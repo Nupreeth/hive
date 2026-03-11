@@ -149,6 +149,51 @@ fi
 echo -e "${GREEN}⬢${NC} Python $PYTHON_VERSION"
 echo ""
 
+# Detect user's shell rc file
+detect_shell_rc() {
+    local shell_name
+    shell_name=$(basename "$SHELL")
+
+    case "$shell_name" in
+        zsh)
+            if [ -f "$HOME/.zshrc" ]; then
+                echo "$HOME/.zshrc"
+            else
+                echo "$HOME/.zshenv"
+            fi
+            ;;
+        bash)
+            if [ -f "$HOME/.bashrc" ]; then
+                echo "$HOME/.bashrc"
+            elif [ -f "$HOME/.bash_profile" ]; then
+                echo "$HOME/.bash_profile"
+            else
+                echo "$HOME/.profile"
+            fi
+            ;;
+        *)
+            # Fallback to .profile for other shells
+            echo "$HOME/.profile"
+            ;;
+    esac
+}
+
+path_has_entry() {
+    case ":$1:" in
+        *":$2:"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+SHELL_RC_FILE=$(detect_shell_rc)
+LOCAL_BIN_DIR="$HOME/.local/bin"
+LOCAL_BIN_EXPORT='export PATH="$HOME/.local/bin:$PATH"'
+UV_INSTALLED_BY_QUICKSTART=false
+LOCAL_BIN_WAS_IN_PATH=false
+if path_has_entry "$PATH" "$LOCAL_BIN_DIR"; then
+    LOCAL_BIN_WAS_IN_PATH=true
+fi
+
 # Check for uv (install automatically if missing)
 if ! command -v uv &> /dev/null; then
     echo -e "${YELLOW}  uv not found. Installing...${NC}"
@@ -159,7 +204,8 @@ if ! command -v uv &> /dev/null; then
     fi
 
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="$HOME/.local/bin:$PATH"
+    export PATH="$LOCAL_BIN_DIR:$PATH"
+    UV_INSTALLED_BY_QUICKSTART=true
 
     if ! command -v uv &> /dev/null; then
         echo -e "${RED}Error: uv installation failed${NC}"
@@ -171,6 +217,16 @@ fi
 
 UV_VERSION=$(uv --version)
 echo -e "${GREEN}  ✓ uv detected: $UV_VERSION${NC}"
+if [ "$UV_INSTALLED_BY_QUICKSTART" = true ] && [ "$LOCAL_BIN_WAS_IN_PATH" = false ]; then
+    echo -e "${YELLOW}  ⚠ uv is available in this quickstart session only because PATH was updated in-script${NC}"
+    echo -e "${YELLOW}    New terminals may still say 'uv: command not found' until your shell PATH is updated${NC}"
+    echo -e "${YELLOW}    Add this line to ${SHELL_RC_FILE}:${NC}"
+    echo -e "     ${DIM}${LOCAL_BIN_EXPORT}${NC}"
+    echo -e "${YELLOW}    Then reload your shell:${NC}"
+    echo -e "     ${DIM}source \"$SHELL_RC_FILE\"${NC}"
+    echo -e "${YELLOW}    Verify later with:${NC}"
+    echo -e "     ${DIM}command -v uv && uv --version${NC}"
+fi
 echo ""
 
 # Check for Node.js (needed for frontend dashboard)
@@ -630,38 +686,6 @@ fi
 # Configuration directory
 HIVE_CONFIG_DIR="$HOME/.hive"
 HIVE_CONFIG_FILE="$HIVE_CONFIG_DIR/configuration.json"
-
-# Detect user's shell rc file
-detect_shell_rc() {
-    local shell_name
-    shell_name=$(basename "$SHELL")
-
-    case "$shell_name" in
-        zsh)
-            if [ -f "$HOME/.zshrc" ]; then
-                echo "$HOME/.zshrc"
-            else
-                echo "$HOME/.zshenv"
-            fi
-            ;;
-        bash)
-            if [ -f "$HOME/.bashrc" ]; then
-                echo "$HOME/.bashrc"
-            elif [ -f "$HOME/.bash_profile" ]; then
-                echo "$HOME/.bash_profile"
-            else
-                echo "$HOME/.profile"
-            fi
-            ;;
-        *)
-            # Fallback to .profile for other shells
-            echo "$HOME/.profile"
-            ;;
-    esac
-}
-
-SHELL_RC_FILE=$(detect_shell_rc)
-SHELL_NAME=$(basename "$SHELL")
 
 # Prompt the user to choose a model for their selected provider.
 # Sets SELECTED_MODEL and SELECTED_MAX_TOKENS.
@@ -1465,12 +1489,12 @@ ln -s "$HIVE_SCRIPT" "$HIVE_LINK"
 echo -e "${GREEN}  ✓ hive CLI installed to ~/.local/bin/hive${NC}"
 
 # Check if ~/.local/bin is in PATH
-if echo "$PATH" | grep -q "$HOME/.local/bin"; then
+if path_has_entry "$PATH" "$LOCAL_BIN_DIR"; then
     echo -e "${GREEN}  ✓ ~/.local/bin is in PATH${NC}"
 else
     echo -e "${YELLOW}  ⚠ Add ~/.local/bin to your PATH:${NC}"
-    echo -e "     ${DIM}echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc${NC}"
-    echo -e "     ${DIM}source ~/.bashrc${NC}"
+    echo -e "     ${DIM}echo '$LOCAL_BIN_EXPORT' >> \"$SHELL_RC_FILE\"${NC}"
+    echo -e "     ${DIM}source \"$SHELL_RC_FILE\"${NC}"
 fi
 
 echo ""
