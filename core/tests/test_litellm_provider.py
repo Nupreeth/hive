@@ -423,6 +423,12 @@ class TestComputeRetryDelay:
         exc = _make_exception_with_headers({"retry-after-ms": "5000"})
         assert _compute_retry_delay(0, exception=exc) == 5.0
 
+    def test_response_object_retry_after_ms_header(self):
+        """Direct response objects should also honor retry-after-ms headers."""
+        response = MagicMock()
+        response.headers = {"retry-after-ms": "2500"}
+        assert _compute_retry_delay(0, exception=response) == 2.5
+
     def test_retry_after_ms_fractional(self):
         """retry-after-ms should handle fractional values."""
         exc = _make_exception_with_headers({"retry-after-ms": "1500"})
@@ -432,6 +438,12 @@ class TestComputeRetryDelay:
         """retry-after header as seconds should be parsed."""
         exc = _make_exception_with_headers({"retry-after": "3"})
         assert _compute_retry_delay(0, exception=exc) == 3.0
+
+    def test_response_object_retry_after_seconds_header(self):
+        """Direct response objects should honor retry-after headers."""
+        response = MagicMock()
+        response.headers = {"retry-after": "4"}
+        assert _compute_retry_delay(0, exception=response) == 4.0
 
     def test_retry_after_seconds_fractional(self):
         """retry-after header should handle fractional seconds."""

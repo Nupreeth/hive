@@ -123,10 +123,7 @@ MINIMAX_API_BASE = "https://api.minimax.io/v1"
 # enforces a coding-agent whitelist that blocks unknown User-Agents.
 KIMI_API_BASE = "https://api.kimi.com/coding"
 
-# Empty-stream retries use a short fixed delay, not the rate-limit backoff.
-# Conversation-structure issues are deterministic — long waits don't help.
 EMPTY_STREAM_MAX_RETRIES = 3
-EMPTY_STREAM_RETRY_DELAY = 1.0  # seconds
 
 # Directory for dumping failed requests
 FAILED_REQUESTS_DIR = Path.home() / ".hive" / "failed_requests"
@@ -197,40 +194,46 @@ def _compute_retry_delay(
 
     All values are capped at max_delay seconds.
     """
+    headers = None
     if exception is not None:
         response = getattr(exception, "response", None)
         if response is not None:
             headers = getattr(response, "headers", None)
-            if headers is not None:
-                # Priority 1: retry-after-ms (milliseconds)
-                retry_after_ms = headers.get("retry-after-ms")
-                if retry_after_ms is not None:
-                    try:
-                        delay = float(retry_after_ms) / 1000.0
-                        return min(max(delay, 0), max_delay)
-                    except (ValueError, TypeError):
-                        pass
+        if headers is None:
+            # Empty-response retry paths have a response-like object directly,
+            # not an exception wrapper with `.response`.
+            headers = getattr(exception, "headers", None)
 
-                # Priority 2: retry-after (seconds or HTTP-date)
-                retry_after = headers.get("retry-after")
-                if retry_after is not None:
-                    # Try as seconds (float)
-                    try:
-                        delay = float(retry_after)
-                        return min(max(delay, 0), max_delay)
-                    except (ValueError, TypeError):
-                        pass
+    if headers is not None:
+        # Priority 1: retry-after-ms (milliseconds)
+        retry_after_ms = headers.get("retry-after-ms")
+        if retry_after_ms is not None:
+            try:
+                delay = float(retry_after_ms) / 1000.0
+                return min(max(delay, 0), max_delay)
+            except (ValueError, TypeError):
+                pass
 
-                    # Try as HTTP-date (e.g., "Fri, 31 Dec 2025 23:59:59 GMT")
-                    try:
-                        from email.utils import parsedate_to_datetime
+        # Priority 2: retry-after (seconds or HTTP-date)
+        retry_after = headers.get("retry-after")
+        if retry_after is not None:
+            # Try as seconds (float)
+            try:
+                delay = float(retry_after)
+                return min(max(delay, 0), max_delay)
+            except (ValueError, TypeError):
+                pass
 
-                        retry_date = parsedate_to_datetime(retry_after)
-                        now = datetime.now(retry_date.tzinfo)
-                        delay = (retry_date - now).total_seconds()
-                        return min(max(delay, 0), max_delay)
-                    except (ValueError, TypeError, OverflowError):
-                        pass
+            # Try as HTTP-date (e.g., "Fri, 31 Dec 2025 23:59:59 GMT")
+            try:
+                from email.utils import parsedate_to_datetime
+
+                retry_date = parsedate_to_datetime(retry_after)
+                now = datetime.now(retry_date.tzinfo)
+                delay = (retry_date - now).total_seconds()
+                return min(max(delay, 0), max_delay)
+            except (ValueError, TypeError, OverflowError):
+                pass
 
     # Fallback: exponential backoff
     delay = backoff_base * (2**attempt)
@@ -439,7 +442,7 @@ class LiteLLMProvider(LLMProvider):
                             f"choices={len(response.choices) if response.choices else 0})"
                         )
                         return response
-                    wait = _compute_retry_delay(attempt)
+                    wait = _compute_retry_delay(attempt, exception=response)
                     logger.warning(
                         f"[retry] {model} returned empty response "
                         f"(finish_reason={finish_reason}, "
@@ -640,7 +643,7 @@ class LiteLLMProvider(LLMProvider):
                             f"choices={len(response.choices) if response.choices else 0})"
                         )
                         return response
-                    wait = _compute_retry_delay(attempt)
+                    wait = _compute_retry_delay(attempt, exception=response)
                     logger.warning(
                         f"[async-retry] {model} returned empty response "
                         f"(finish_reason={finish_reason}, "
@@ -1068,6 +1071,7 @@ class LiteLLMProvider(LLMProvider):
                             self.model,
                             full_messages,
                         )
+                        wait = _compute_retry_delay(attempt)
                         dump_path = _dump_failed_request(
                             model=self.model,
                             kwargs=kwargs,
@@ -1079,10 +1083,10 @@ class LiteLLMProvider(LLMProvider):
                             f"after {last_role} message — "
                             f"~{token_count} tokens ({token_method}). "
                             f"Request dumped to: {dump_path}. "
-                            f"Retrying in {EMPTY_STREAM_RETRY_DELAY}s "
+                            f"Retrying in {wait:.1f}s "
                             f"(attempt {attempt + 1}/{EMPTY_STREAM_MAX_RETRIES})"
                         )
-                        await asyncio.sleep(EMPTY_STREAM_RETRY_DELAY)
+                        await asyncio.sleep(wait)
                         continue
 
                     # All retries exhausted — log and return the empty
