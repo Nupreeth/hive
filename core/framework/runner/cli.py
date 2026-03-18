@@ -383,6 +383,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     from framework.credentials.models import CredentialError
     from framework.observability import configure_logging
     from framework.runner import AgentRunner
+    from framework.runner.preload_validation import PreloadValidationError
 
     # Set logging level (quiet by default for cleaner output)
     if args.quiet:
@@ -432,8 +433,14 @@ def cmd_run(args: argparse.Namespace) -> int:
             args.agent_path,
             model=args.model,
         )
+    except PreloadValidationError as e:
+        print(f"\n{e}", file=sys.stderr)
+        return 1
     except CredentialError as e:
         print(f"\n{e}", file=sys.stderr)
+        return 1
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
         return 1
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
